@@ -1,0 +1,22 @@
+# Rust
+/target/
+**/*.rs.bk
+*.pdb
+Cargo.lock
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Output files
+*.dot
+*.png
+*.svg
+*.pdf
+
+# Test files (optional - uncomment if you want to keep them local)
+# test-php/
