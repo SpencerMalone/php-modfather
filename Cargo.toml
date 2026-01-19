@@ -24,3 +24,6 @@ anyhow = "1.0"
 
 # Collections
 indexmap = "2.5"
+
+# Graph algorithms
+petgraph = "0.6"

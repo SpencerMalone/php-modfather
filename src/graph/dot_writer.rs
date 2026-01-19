@@ -86,8 +86,17 @@ impl DotWriter {
                self.escape_id(&node.id),
                self.escape_string(&node.label))?;
 
+        // Style external nodes differently
+        let is_external = node.metadata.get("type").map(|t| t == "external").unwrap_or(false);
+        if is_external {
+            write!(writer, ", fillcolor=\"lightyellow\", style=\"rounded,filled,dashed\"")?;
+        }
+
         for (key, value) in &node.metadata {
-            write!(writer, ", {}=\"{}\"", key, self.escape_string(value))?;
+            // Skip 'type' metadata as it's internal
+            if key != "type" {
+                write!(writer, ", {}=\"{}\"", key, self.escape_string(value))?;
+            }
         }
 
         writeln!(writer, "];")?;

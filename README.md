@@ -8,8 +8,14 @@ This is mostly AI slop, sorry y'all just being upfront and goofing off.
 
 - **Class Dependency Analysis**: Analyzes PHP classes, interfaces, traits, and enums
 - **Namespace Dependency Analysis**: Visualizes dependencies between namespaces
+- **Module Recommendations**: AI-powered suggestions for modularization with cycle detection
+  - Detects circular dependencies using Tarjan's strongly connected components algorithm
+  - Classifies cycles by severity and type (self-cycle, simple, complex)
+  - Provides actionable recommendations to break cycles
+  - Suggests module groupings with cohesion metrics
 - **Namespace Support**: Properly handles namespaced classes and fully qualified names
 - **Use Statement Support**: Fully resolves PHP `use` statements and aliases for accurate dependency tracking
+- **External Dependency Tracking**: Optionally include external dependencies (vendor libraries, PSR interfaces) with distinct visual styling
 - **Type Hint Analysis**: Extracts dependencies from:
   - Class inheritance (`extends`)
   - Interface implementations (`implements`)
@@ -73,6 +79,51 @@ This is particularly useful for:
 - Planning modularization strategies
 - Detecting circular dependencies between modules
 
+### Module recommendations with cycle detection
+
+Generate a detailed report analyzing your codebase structure and recommending module groupings:
+
+```bash
+php-modfather /path/to/php/code -t recommend --output recommendations.md
+```
+
+The recommendation engine:
+- **Detects circular dependencies** between namespaces that prevent clean modularization
+- **Classifies cycle severity** (Low/Medium/High) based on coupling strength
+- **Suggests specific actions** to break cycles (interface extraction, class movement, dependency inversion)
+- **Proposes module groupings** based on namespace structure with cohesion scores
+- **Prioritizes acyclic structures** for clean module boundaries
+
+Example output:
+```markdown
+# PHP Modularization Analysis Report
+
+## ⚠️  Circular Dependencies Detected
+
+### Cycle #1
+**Severity**: 🔴 High
+**Type**: Simple
+**Namespaces involved**: App\Models ↔ App\Controllers
+
+## 💡 Recommendations to Break Cycles
+- Option 1: Extract shared interfaces into a common namespace
+- Option 2: Move coupled classes into one namespace
+- Option 3: Introduce dependency inversion
+
+## 📦 Suggested Module Groupings
+Modules ranked by cohesion score...
+```
+
+### Including external dependencies
+
+By default, only classes defined within the analyzed code are shown. To include external dependencies (e.g., vendor libraries, PSR interfaces):
+
+```bash
+php-modfather /path/to/php/code --include-external
+```
+
+External dependencies are displayed with a different style (dashed border, yellow background) to distinguish them from internal code.
+
 ### Verbose mode
 
 ```bash
@@ -87,6 +138,8 @@ php-modfather /path/to/php/code --verbose
 - `-t, --analysis-type <TYPE>`: Type of analysis to perform
   - `class` (default): Individual class dependencies
   - `namespace`: Namespace-level dependencies
+  - `recommend`: Module recommendations with cycle detection
+- `--include-external`: Include external dependencies (classes/namespaces referenced but not defined in analyzed code)
 - `-v, --verbose`: Enable verbose output showing progress
 
 ## Visualizing the Graph
@@ -179,6 +232,7 @@ Example: The `NamespaceDependencyAnalyzer` aggregates class-level dependencies t
 - **walkdir**: Recursive directory traversal
 - **anyhow**: Error handling
 - **indexmap**: Ordered hash maps for deterministic output
+- **petgraph**: Graph algorithms for cycle detection and analysis
 
 ## Limitations
 
@@ -189,12 +243,13 @@ Example: The `NamespaceDependencyAnalyzer` aggregates class-level dependencies t
 
 ## Future Features
 
-- Module/package level dependency analysis
-- Detection and highlighting of circular dependencies
+- Advanced clustering algorithms (Louvain, spectral clustering) for module suggestions
 - Export to additional formats (JSON, GraphML, Mermaid)
 - Integration with PHP autoloading standards (PSR-4)
 - Filtering options (exclude vendors, test files, etc.)
-- Metrics (coupling, cohesion scores)
+- Additional metrics (instability, abstractness, distance from main sequence)
+- Automated refactoring suggestions with code generation
+- Integration with CI/CD pipelines for architecture governance
 
 ## Contributing
 

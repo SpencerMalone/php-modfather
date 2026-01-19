@@ -7,6 +7,15 @@ use mago_syntax::ast::*;
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
+/// Extract namespace from a fully qualified class name
+fn extract_namespace_from_class(class_fqn: &str) -> String {
+    if let Some(pos) = class_fqn.rfind('\\') {
+        class_fqn[..pos].to_string()
+    } else {
+        "\\".to_string()
+    }
+}
+
 /// Tracks imported classes via `use` statements
 #[derive(Debug, Default, Clone)]
 struct ImportContext {
@@ -365,7 +374,7 @@ impl GraphAnalyzer for NamespaceDependencyAnalyzer {
         Ok(())
     }
 
-    fn build_graph(&self) -> DependencyGraph {
+    fn build_graph(&self, include_external: bool) -> DependencyGraph {
         let mut graph = DependencyGraph::new();
 
         // Build namespace dependencies from class dependencies
@@ -373,20 +382,26 @@ impl GraphAnalyzer for NamespaceDependencyAnalyzer {
         for (from_class, to_classes) in &self.class_dependencies {
             if let Some(from_namespace) = self.class_to_namespace.get(from_class) {
                 for to_class in to_classes {
-                    if let Some(to_namespace) = self.class_to_namespace.get(to_class) {
-                        // Don't create self-edges (namespace depending on itself)
-                        if from_namespace != to_namespace {
-                            ns_deps
-                                .entry(from_namespace.clone())
-                                .or_insert_with(HashSet::new)
-                                .insert(to_namespace.clone());
-                        }
+                    // Check if this is an internal or external dependency
+                    let to_namespace = if let Some(ns) = self.class_to_namespace.get(to_class) {
+                        ns.clone()
+                    } else {
+                        // External class - extract namespace from FQN
+                        extract_namespace_from_class(to_class)
+                    };
+
+                    // Don't create self-edges (namespace depending on itself)
+                    if from_namespace != &to_namespace {
+                        ns_deps
+                            .entry(from_namespace.clone())
+                            .or_insert_with(HashSet::new)
+                            .insert(to_namespace);
                     }
                 }
             }
         }
 
-        // Add all namespaces as nodes
+        // Add all defined namespaces as nodes (internal dependencies)
         for (namespace, files) in &self.namespace_files {
             let file_count = files.len();
             let label = if namespace == "\\" {
@@ -397,15 +412,29 @@ impl GraphAnalyzer for NamespaceDependencyAnalyzer {
 
             let node = Node::new(namespace.clone(), label)
                 .with_metadata("files", file_count.to_string())
-                .with_metadata("file_list", files.iter().cloned().collect::<Vec<_>>().join(", "));
+                .with_metadata("file_list", files.iter().cloned().collect::<Vec<_>>().join(", "))
+                .with_metadata("type", "internal");
             graph.add_node(node);
         }
 
         // Add namespace dependencies as edges
         for (from, deps) in &ns_deps {
             for to in deps {
-                // Only add edge if the target namespace exists in our analyzed namespaces
-                if self.namespace_files.contains_key(to) {
+                let is_external = !self.namespace_files.contains_key(to);
+
+                if include_external || !is_external {
+                    // Add external namespaces as nodes if including external dependencies
+                    if is_external && include_external {
+                        let label = if to == "\\" {
+                            "Global Namespace".to_string()
+                        } else {
+                            to.clone()
+                        };
+                        let node = Node::new(to.clone(), label)
+                            .with_metadata("type", "external");
+                        graph.add_node(node);
+                    }
+
                     graph.add_edge(Edge::new(from.clone(), to.clone()));
                 }
             }

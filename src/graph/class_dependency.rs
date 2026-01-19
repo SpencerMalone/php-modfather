@@ -343,21 +343,30 @@ impl GraphAnalyzer for ClassDependencyAnalyzer {
         Ok(())
     }
 
-    fn build_graph(&self) -> DependencyGraph {
+    fn build_graph(&self, include_external: bool) -> DependencyGraph {
         let mut graph = DependencyGraph::new();
 
-        // Add all classes as nodes
+        // Add all defined classes as nodes (internal dependencies)
         for (class_name, file_path) in &self.classes {
             let node = Node::new(class_name.clone(), class_name.clone())
-                .with_metadata("file", file_path.clone());
+                .with_metadata("file", file_path.clone())
+                .with_metadata("type", "internal");
             graph.add_node(node);
         }
 
         // Add dependencies as edges
         for (from, deps) in &self.dependencies {
             for to in deps {
-                // Only add edge if the target class exists in our analyzed classes
-                if self.classes.contains_key(to) {
+                let is_external = !self.classes.contains_key(to);
+
+                if include_external || !is_external {
+                    // Add external classes as nodes if including external dependencies
+                    if is_external && include_external {
+                        let node = Node::new(to.clone(), to.clone())
+                            .with_metadata("type", "external");
+                        graph.add_node(node);
+                    }
+
                     graph.add_edge(Edge::new(from.clone(), to.clone()));
                 }
             }

@@ -1,6 +1,7 @@
 pub mod class_dependency;
 pub mod namespace_dependency;
 pub mod dot_writer;
+pub mod module_recommender;
 
 use std::collections::{HashMap, HashSet};
 
@@ -117,5 +118,5 @@ impl DependencyGraph {
 /// Trait for graph analyzers that extract dependencies from PHP code
 pub trait GraphAnalyzer {
     fn analyze(&mut self, file_path: &str, content: &str) -> anyhow::Result<()>;
-    fn build_graph(&self) -> DependencyGraph;
+    fn build_graph(&self, include_external: bool) -> DependencyGraph;
 }
