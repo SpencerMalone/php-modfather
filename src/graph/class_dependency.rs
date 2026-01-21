@@ -225,6 +225,9 @@ impl ClassDependencyAnalyzer {
                         self.extract_hint_dependencies(hint, current_class, namespace, imports);
                     }
                 }
+
+                // Check method body for usage-based dependencies
+                self.extract_body_dependencies(&method.body, current_class, namespace, imports);
             }
             _ => {}
         }
@@ -263,6 +266,102 @@ impl ClassDependencyAnalyzer {
 
     fn extract_backing_type_dependencies(&mut self, backing: &EnumBackingTypeHint, current_class: &str, namespace: Option<&str>, imports: &ImportContext) {
         self.extract_hint_dependencies(&backing.hint, current_class, namespace, imports);
+    }
+
+    /// Extract dependencies from method/function bodies
+    fn extract_body_dependencies(&mut self, body: &MethodBody, current_class: &str, namespace: Option<&str>, imports: &ImportContext) {
+        match body {
+            MethodBody::Concrete(block) => {
+                for statement in block.statements.iter() {
+                    self.extract_statement_dependencies(statement, current_class, namespace, imports);
+                }
+            }
+            MethodBody::Abstract(_) => {
+                // Abstract methods have no body
+            }
+        }
+    }
+
+    /// Extract dependencies from statements within method bodies
+    fn extract_statement_dependencies(&mut self, statement: &Statement, current_class: &str, namespace: Option<&str>, imports: &ImportContext) {
+        match statement {
+            Statement::Expression(expr_stmt) => {
+                self.extract_expression_dependencies(&expr_stmt.expression, current_class, namespace, imports);
+            }
+            Statement::Return(return_stmt) => {
+                if let Some(ref expr) = return_stmt.value {
+                    self.extract_expression_dependencies(expr, current_class, namespace, imports);
+                }
+            }
+            Statement::Try(try_stmt) => {
+                // Check catch clauses for exception types
+                for catch_clause in try_stmt.catch_clauses.iter() {
+                    // TryCatchClause has a hint field (singular)
+                    self.extract_hint_dependencies(&catch_clause.hint, current_class, namespace, imports);
+                }
+            }
+            _ => {
+                // For other statement types, we'd need to recurse, but let's keep it simple for now
+                // Most important dependencies (new, static calls, instanceof) are in expressions
+            }
+        }
+    }
+
+    /// Extract dependencies from expressions (new, static calls, instanceof, etc.)
+    fn extract_expression_dependencies(&mut self, expression: &Expression, current_class: &str, namespace: Option<&str>, imports: &ImportContext) {
+        match expression {
+            // new ClassName()
+            Expression::Instantiation(instantiation) => {
+                // The class field contains the class being instantiated
+                if let Expression::Identifier(id) = &*instantiation.class {
+                    let class_name = id.value();
+                    if self.is_class_type(class_name) {
+                        let class_fqn = self.resolve_class_name(class_name, namespace, imports);
+                        self.add_dependency(current_class, &class_fqn);
+                    }
+                }
+                // Also check arguments for nested instantiations
+                if let Some(ref arg_list) = instantiation.argument_list {
+                    for arg in arg_list.arguments.iter() {
+                        match arg {
+                            Argument::Positional(pos) => {
+                                self.extract_expression_dependencies(&pos.value, current_class, namespace, imports);
+                            }
+                            Argument::Named(named) => {
+                                self.extract_expression_dependencies(&named.value, current_class, namespace, imports);
+                            }
+                        }
+                    }
+                }
+            }
+            // $var instanceof ClassName
+            Expression::Binary(binary) => {
+                if matches!(binary.operator, BinaryOperator::Instanceof(_)) {
+                    if let Expression::Identifier(id) = &*binary.rhs {
+                        let class_name = id.value();
+                        if self.is_class_type(class_name) {
+                            let class_fqn = self.resolve_class_name(class_name, namespace, imports);
+                            self.add_dependency(current_class, &class_fqn);
+                        }
+                    }
+                }
+                // Recurse into left and right sides to catch nested instantiations
+                self.extract_expression_dependencies(&binary.lhs, current_class, namespace, imports);
+                self.extract_expression_dependencies(&binary.rhs, current_class, namespace, imports);
+            }
+            // Recurse into nested expressions to find instantiations
+            Expression::Parenthesized(paren) => {
+                self.extract_expression_dependencies(&paren.expression, current_class, namespace, imports);
+            }
+            Expression::Assignment(assign) => {
+                self.extract_expression_dependencies(&assign.lhs, current_class, namespace, imports);
+                self.extract_expression_dependencies(&assign.rhs, current_class, namespace, imports);
+            }
+            _ => {
+                // Other expression types - would need more Mago API exploration to handle
+                // For now we've covered the most important cases: new, instanceof, catch
+            }
+        }
     }
 
     fn extract_namespace_name(&self, ns: &Namespace) -> String {
