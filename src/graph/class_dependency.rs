@@ -117,6 +117,13 @@ impl ClassDependencyAnalyzer {
 
         self.classes.insert(fqn.clone(), file_path.to_string());
 
+        // Analyze attributes (PHP 8+)
+        for attribute_list in class.attribute_lists.iter() {
+            for attribute in attribute_list.attributes.iter() {
+                self.extract_attribute_dependencies(attribute, &fqn, namespace, imports);
+            }
+        }
+
         // Analyze parent class
         if let Some(ref extends) = class.extends {
             for parent in extends.types.iter() {
@@ -138,6 +145,30 @@ impl ClassDependencyAnalyzer {
         // Visit class members
         for member in class.members.iter() {
             self.visit_class_member(member, &fqn, namespace, imports);
+        }
+    }
+
+    /// Extract dependencies from attributes (PHP 8+)
+    fn extract_attribute_dependencies(&mut self, attribute: &Attribute, current_class: &str, namespace: Option<&str>, imports: &ImportContext) {
+        // Extract the attribute class name
+        let attr_name = attribute.name.value();
+        if self.is_class_type(attr_name) {
+            let attr_fqn = self.resolve_class_name(attr_name, namespace, imports);
+            self.add_dependency(current_class, &attr_fqn);
+        }
+
+        // Check attribute arguments for nested class references
+        if let Some(ref arg_list) = attribute.argument_list {
+            for arg in arg_list.arguments.iter() {
+                match arg {
+                    Argument::Positional(pos) => {
+                        self.extract_expression_dependencies(&pos.value, current_class, namespace, imports);
+                    }
+                    Argument::Named(named) => {
+                        self.extract_expression_dependencies(&named.value, current_class, namespace, imports);
+                    }
+                }
+            }
         }
     }
 
@@ -334,6 +365,37 @@ impl ClassDependencyAnalyzer {
                     }
                 }
             }
+            // throw new ExceptionClass()
+            Expression::Throw(throw_expr) => {
+                // Recurse to catch the instantiation inside throw
+                self.extract_expression_dependencies(throw_expr.exception, current_class, namespace, imports);
+            }
+            // ClassName::$property, ClassName::CONSTANT
+            Expression::Access(access) => {
+                match access {
+                    // ClassName::$property
+                    Access::StaticProperty(static_prop) => {
+                        if let Expression::Identifier(id) = &*static_prop.class {
+                            let class_name = id.value();
+                            if self.is_class_type(class_name) {
+                                let class_fqn = self.resolve_class_name(class_name, namespace, imports);
+                                self.add_dependency(current_class, &class_fqn);
+                            }
+                        }
+                    }
+                    // ClassName::CONSTANT or ClassName::class
+                    Access::ClassConstant(class_const) => {
+                        if let Expression::Identifier(id) = &*class_const.class {
+                            let class_name = id.value();
+                            if self.is_class_type(class_name) {
+                                let class_fqn = self.resolve_class_name(class_name, namespace, imports);
+                                self.add_dependency(current_class, &class_fqn);
+                            }
+                        }
+                    }
+                    _ => {}
+                }
+            }
             // $var instanceof ClassName
             Expression::Binary(binary) => {
                 if matches!(binary.operator, BinaryOperator::Instanceof(_)) {
@@ -349,6 +411,47 @@ impl ClassDependencyAnalyzer {
                 self.extract_expression_dependencies(&binary.lhs, current_class, namespace, imports);
                 self.extract_expression_dependencies(&binary.rhs, current_class, namespace, imports);
             }
+            // match($expr) { ClassName::class => ... }
+            Expression::Match(match_expr) => {
+                // Check the condition
+                self.extract_expression_dependencies(match_expr.expression, current_class, namespace, imports);
+                // Check each arm
+                for arm in match_expr.arms.iter() {
+                    match arm {
+                        MatchArm::Expression(expr_arm) => {
+                            // Check conditions
+                            for condition in expr_arm.conditions.iter() {
+                                self.extract_expression_dependencies(condition, current_class, namespace, imports);
+                            }
+                            // Check the body
+                            self.extract_expression_dependencies(expr_arm.expression, current_class, namespace, imports);
+                        }
+                        MatchArm::Default(default_arm) => {
+                            // Check the default body
+                            self.extract_expression_dependencies(default_arm.expression, current_class, namespace, imports);
+                        }
+                    }
+                }
+            }
+            // Anonymous classes: new class implements Interface {}
+            Expression::AnonymousClass(anon_class) => {
+                // Check implements
+                if let Some(ref implements) = anon_class.implements {
+                    for interface in implements.types.iter() {
+                        let interface_name = self.extract_identifier_from_name(interface);
+                        let interface_fqn = self.resolve_class_name(&interface_name, namespace, imports);
+                        self.add_dependency(current_class, &interface_fqn);
+                    }
+                }
+                // Check extends
+                if let Some(ref extends) = anon_class.extends {
+                    for parent in extends.types.iter() {
+                        let parent_name = self.extract_identifier_from_name(parent);
+                        let parent_fqn = self.resolve_class_name(&parent_name, namespace, imports);
+                        self.add_dependency(current_class, &parent_fqn);
+                    }
+                }
+            }
             // Recurse into nested expressions to find instantiations
             Expression::Parenthesized(paren) => {
                 self.extract_expression_dependencies(&paren.expression, current_class, namespace, imports);
@@ -357,9 +460,73 @@ impl ClassDependencyAnalyzer {
                 self.extract_expression_dependencies(&assign.lhs, current_class, namespace, imports);
                 self.extract_expression_dependencies(&assign.rhs, current_class, namespace, imports);
             }
+            Expression::Call(call) => {
+                match call {
+                    // ClassName::method() - static method call
+                    Call::StaticMethod(static_method) => {
+                        if let Expression::Identifier(id) = &*static_method.class {
+                            let class_name = id.value();
+                            if self.is_class_type(class_name) {
+                                let class_fqn = self.resolve_class_name(class_name, namespace, imports);
+                                self.add_dependency(current_class, &class_fqn);
+                            }
+                        }
+                        // Also check method call arguments
+                        for arg in static_method.argument_list.arguments.iter() {
+                            match arg {
+                                Argument::Positional(pos) => {
+                                    self.extract_expression_dependencies(&pos.value, current_class, namespace, imports);
+                                }
+                                Argument::Named(named) => {
+                                    self.extract_expression_dependencies(&named.value, current_class, namespace, imports);
+                                }
+                            }
+                        }
+                    }
+                    // Regular function/method calls - recurse into arguments
+                    Call::Function(func_call) => {
+                        self.extract_expression_dependencies(func_call.function, current_class, namespace, imports);
+                        for arg in func_call.argument_list.arguments.iter() {
+                            match arg {
+                                Argument::Positional(pos) => {
+                                    self.extract_expression_dependencies(&pos.value, current_class, namespace, imports);
+                                }
+                                Argument::Named(named) => {
+                                    self.extract_expression_dependencies(&named.value, current_class, namespace, imports);
+                                }
+                            }
+                        }
+                    }
+                    Call::Method(method_call) => {
+                        self.extract_expression_dependencies(method_call.object, current_class, namespace, imports);
+                        for arg in method_call.argument_list.arguments.iter() {
+                            match arg {
+                                Argument::Positional(pos) => {
+                                    self.extract_expression_dependencies(&pos.value, current_class, namespace, imports);
+                                }
+                                Argument::Named(named) => {
+                                    self.extract_expression_dependencies(&named.value, current_class, namespace, imports);
+                                }
+                            }
+                        }
+                    }
+                    Call::NullSafeMethod(null_safe) => {
+                        self.extract_expression_dependencies(null_safe.object, current_class, namespace, imports);
+                        for arg in null_safe.argument_list.arguments.iter() {
+                            match arg {
+                                Argument::Positional(pos) => {
+                                    self.extract_expression_dependencies(&pos.value, current_class, namespace, imports);
+                                }
+                                Argument::Named(named) => {
+                                    self.extract_expression_dependencies(&named.value, current_class, namespace, imports);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
             _ => {
-                // Other expression types - would need more Mago API exploration to handle
-                // For now we've covered the most important cases: new, instanceof, catch
+                // Other expression types
             }
         }
     }
