@@ -50,6 +50,8 @@ pub struct ModuleRecommender {
     namespace_graph: DiGraph<String, ()>,
     namespace_to_index: HashMap<String, NodeIndex>,
     namespace_metrics: HashMap<String, NamespaceMetrics>,
+    min_module_size: usize,
+    max_module_size: usize,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -107,7 +109,15 @@ impl ModuleRecommender {
             namespace_graph,
             namespace_to_index,
             namespace_metrics,
+            min_module_size: 5,
+            max_module_size: 100,
         }
+    }
+
+    /// Set module size constraints
+    pub fn set_size_constraints(&mut self, min_size: usize, max_size: usize) {
+        self.min_module_size = min_size;
+        self.max_module_size = max_size;
     }
 
     /// Detect all cycles in the namespace graph
@@ -260,7 +270,7 @@ impl ModuleRecommender {
         // Group namespaces by their top-level prefix
         let mut namespace_groups: IndexMap<String, Vec<String>> = IndexMap::new();
 
-        for (namespace, metrics) in &self.namespace_metrics {
+        for (namespace, _metrics) in &self.namespace_metrics {
             // Skip the global namespace
             if namespace == "\\" {
                 continue;
@@ -289,28 +299,38 @@ impl ModuleRecommender {
                 .map(|m| m.class_count)
                 .sum();
 
-            let (internal_deps, external_deps) = self.calculate_module_dependencies(&namespaces);
-
-            let cohesion_score = if internal_deps + external_deps > 0 {
-                internal_deps as f64 / (internal_deps + external_deps) as f64
+            // Check if module is too large and needs splitting
+            if class_count > self.max_module_size {
+                // Suggest splitting by second-level namespaces
+                let split_suggestions = self.suggest_module_split(&top_level, &namespaces, &cycle_namespaces);
+                suggestions.extend(split_suggestions);
             } else {
-                1.0
-            };
+                // Module size is acceptable, create a single suggestion
+                let (internal_deps, external_deps) = self.calculate_module_dependencies(&namespaces);
 
-            let module_name = if has_cycles {
-                format!("{} ⚠️ (contains cycles)", top_level)
-            } else {
-                top_level.clone()
-            };
+                let cohesion_score = if internal_deps + external_deps > 0 {
+                    internal_deps as f64 / (internal_deps + external_deps) as f64
+                } else {
+                    1.0
+                };
 
-            suggestions.push(ModuleSuggestion {
-                name: module_name,
-                namespaces,
-                class_count,
-                internal_dependencies: internal_deps,
-                external_dependencies: external_deps,
-                cohesion_score,
-            });
+                let mut module_name = top_level.clone();
+                if has_cycles {
+                    module_name.push_str(" ⚠️ (contains cycles)");
+                }
+                if class_count < self.min_module_size {
+                    module_name.push_str(&format!(" ⚡ (small: {} classes)", class_count));
+                }
+
+                suggestions.push(ModuleSuggestion {
+                    name: module_name,
+                    namespaces,
+                    class_count,
+                    internal_dependencies: internal_deps,
+                    external_dependencies: external_deps,
+                    cohesion_score,
+                });
+            }
         }
 
         // Sort by cohesion score (descending) - higher is better
@@ -321,6 +341,90 @@ impl ModuleRecommender {
         });
 
         suggestions
+    }
+
+    /// Suggest how to split a large module into smaller sub-modules
+    fn suggest_module_split(
+        &self,
+        top_level: &str,
+        namespaces: &[String],
+        cycle_namespaces: &HashSet<String>,
+    ) -> Vec<ModuleSuggestion> {
+        let mut split_suggestions = Vec::new();
+
+        // Group by second-level namespace
+        let mut second_level_groups: IndexMap<String, Vec<String>> = IndexMap::new();
+
+        for namespace in namespaces {
+            let parts: Vec<&str> = namespace.split('\\').collect();
+            let second_level = if parts.len() >= 2 {
+                format!("{}\\{}", parts[0], parts[1])
+            } else {
+                namespace.clone()
+            };
+
+            second_level_groups
+                .entry(second_level)
+                .or_insert_with(Vec::new)
+                .push(namespace.clone());
+        }
+
+        // If we can't split by second level (only one group), suggest arbitrary split
+        if second_level_groups.len() == 1 {
+            let total_classes: usize = namespaces
+                .iter()
+                .filter_map(|ns| self.namespace_metrics.get(ns))
+                .map(|m| m.class_count)
+                .sum();
+
+            split_suggestions.push(ModuleSuggestion {
+                name: format!("{} 🔴 (mega-module: {} classes, consider splitting)", top_level, total_classes),
+                namespaces: namespaces.to_vec(),
+                class_count: total_classes,
+                internal_dependencies: 0,
+                external_dependencies: 0,
+                cohesion_score: 0.5,
+            });
+        } else {
+            // Create suggestions for each second-level group
+            for (second_level, ns_list) in second_level_groups {
+                let class_count: usize = ns_list
+                    .iter()
+                    .filter_map(|ns| self.namespace_metrics.get(ns))
+                    .map(|m| m.class_count)
+                    .sum();
+
+                let has_cycles = ns_list.iter().any(|ns| cycle_namespaces.contains(ns));
+                let (internal_deps, external_deps) = self.calculate_module_dependencies(&ns_list);
+
+                let cohesion_score = if internal_deps + external_deps > 0 {
+                    internal_deps as f64 / (internal_deps + external_deps) as f64
+                } else {
+                    1.0
+                };
+
+                let mut module_name = second_level.clone();
+                if has_cycles {
+                    module_name.push_str(" ⚠️ (contains cycles)");
+                }
+                if class_count < self.min_module_size {
+                    module_name.push_str(&format!(" ⚡ (small: {} classes)", class_count));
+                } else if class_count > self.max_module_size {
+                    module_name.push_str(&format!(" 🔴 (large: {} classes)", class_count));
+                }
+
+                split_suggestions.push(ModuleSuggestion {
+                    name: module_name,
+                    namespaces: ns_list,
+                    class_count,
+                    internal_dependencies: internal_deps,
+                    external_dependencies: external_deps,
+                    cohesion_score,
+                });
+            }
+        }
+
+        split_suggestions
     }
 
     /// Calculate internal vs external dependencies for a group of namespaces

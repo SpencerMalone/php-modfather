@@ -39,6 +39,14 @@ struct Cli {
     #[arg(long)]
     include_external: bool,
 
+    /// Minimum recommended module size in classes (for recommend mode)
+    #[arg(long, default_value = "5")]
+    min_module_size: usize,
+
+    /// Maximum recommended module size in classes (for recommend mode)
+    #[arg(long, default_value = "100")]
+    max_module_size: usize,
+
     /// Verbose output
     #[arg(short, long)]
     verbose: bool,
@@ -98,7 +106,8 @@ fn main() -> anyhow::Result<()> {
         }
 
         // Generate recommendations
-        let recommender = ModuleRecommender::new(&graph);
+        let mut recommender = ModuleRecommender::new(&graph);
+        recommender.set_size_constraints(cli.min_module_size, cli.max_module_size);
         let report = recommender.generate_report();
 
         // Output report
