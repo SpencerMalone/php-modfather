@@ -1,6 +1,7 @@
 pub mod class_dependency;
 pub mod namespace_dependency;
 pub mod dot_writer;
+pub mod csv_writer;
 pub mod module_recommender;
 
 use std::collections::{HashMap, HashSet};

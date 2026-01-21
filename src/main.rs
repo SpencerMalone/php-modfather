@@ -7,6 +7,7 @@ use graph::{
     class_dependency::ClassDependencyAnalyzer,
     namespace_dependency::NamespaceDependencyAnalyzer,
     dot_writer::DotWriter,
+    csv_writer::CsvWriter,
     module_recommender::ModuleRecommender,
     GraphAnalyzer,
 };
@@ -34,6 +35,10 @@ struct Cli {
     /// Type of analysis to perform
     #[arg(short = 't', long, default_value = "class", value_parser = ["class", "namespace", "recommend"])]
     analysis_type: String,
+
+    /// Output format (dot or csv). CSV outputs edge list only.
+    #[arg(short = 'f', long, default_value = "dot", value_parser = ["dot", "csv"])]
+    format: String,
 
     /// Include external dependencies (classes referenced but not defined in analyzed code)
     #[arg(long)]
@@ -159,20 +164,42 @@ fn main() -> anyhow::Result<()> {
             println!("  Edges: {}", graph.edges.len());
         }
 
-        // Write the graph in DOT format
-        let writer = DotWriter::new(&cli.graph_name);
-
-        if let Some(output_path) = cli.output {
-            let file = File::create(&output_path)?;
-            let mut buf_writer = BufWriter::new(file);
-            writer.write(&graph, &mut buf_writer)?;
-            if cli.verbose {
-                println!("\nGraph written to: {}", output_path.display());
+        // Write the graph in the requested format
+        match cli.format.as_str() {
+            "csv" => {
+                let writer = CsvWriter::new();
+                if let Some(output_path) = cli.output {
+                    let file = File::create(&output_path)?;
+                    let mut buf_writer = BufWriter::new(file);
+                    writer.write(&graph, &mut buf_writer)?;
+                    if cli.verbose {
+                        println!("\nCSV written to: {}", output_path.display());
+                    }
+                } else {
+                    let stdout = std::io::stdout();
+                    let mut handle = stdout.lock();
+                    writer.write(&graph, &mut handle)?;
+                }
             }
-        } else {
-            let stdout = std::io::stdout();
-            let mut handle = stdout.lock();
-            writer.write(&graph, &mut handle)?;
+            "dot" => {
+                let writer = DotWriter::new(&cli.graph_name);
+                if let Some(output_path) = cli.output {
+                    let file = File::create(&output_path)?;
+                    let mut buf_writer = BufWriter::new(file);
+                    writer.write(&graph, &mut buf_writer)?;
+                    if cli.verbose {
+                        println!("\nGraph written to: {}", output_path.display());
+                    }
+                } else {
+                    let stdout = std::io::stdout();
+                    let mut handle = stdout.lock();
+                    writer.write(&graph, &mut handle)?;
+                }
+            }
+            _ => {
+                eprintln!("Unknown format: {}", cli.format);
+                std::process::exit(1);
+            }
         }
     }
 
