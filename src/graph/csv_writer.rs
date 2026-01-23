@@ -23,7 +23,7 @@ impl CsvWriter {
     pub fn write<W: Write>(&self, graph: &DependencyGraph, writer: &mut W) -> Result<()> {
         // Write header if requested
         if self.include_header {
-            writeln!(writer, "from,to")?;
+            writeln!(writer, "source,target")?;
         }
 
         // Write each edge as a row
@@ -58,7 +58,7 @@ mod tests {
         writer.write(&graph, &mut output).unwrap();
 
         let result = String::from_utf8(output).unwrap();
-        assert_eq!(result, "from,to\nClassA,ClassB\n");
+        assert_eq!(result, "source,target\nClassA,ClassB\n");
     }
 
     #[test]
@@ -91,6 +91,6 @@ mod tests {
         writer.write(&graph, &mut output).unwrap();
 
         let result = String::from_utf8(output).unwrap();
-        assert_eq!(result, "from,to\nA,B\nA,C\nB,C\n");
+        assert_eq!(result, "source,target\nA,B\nA,C\nB,C\n");
     }
 }
